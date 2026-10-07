@@ -7,3 +7,4 @@ fusion_mc
 *.o
 # python
 __pycache__/
+mujoco/out/stats3000/
