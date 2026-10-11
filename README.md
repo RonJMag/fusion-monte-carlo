@@ -26,6 +26,8 @@ was then generalized to thermonuclear fusion:
 
     src/Fusion_Monte_Carlo.cpp   single-file C++17 generator
     scripts/plot_results.py      regenerates figures/ from data/
+    scripts/plot_profile_results.py   Stage 6 profile / spectrum / wall-load figure
+    mujoco/                      MuJoCo 3.15 event displays (cylinder and tokamak)
     data/                        CSV output: per-event four-vectors and binned histograms for every run
     figures/                     result plots
     legacy/                      original e+e- -> mu+mu- generator and its histograms
@@ -86,6 +88,35 @@ spectrometers see the beam. (c) `--transport <cm>` runs a toy slab: path length
 s = −ln(u)/Σ_t, absorb-or-scatter by rejection, elastic energy loss on A = 7. The constants
 (Σ_t = 0.067 cm⁻¹, P_breed = 0.20) are placeholders for ENDF/B data.
 
+**Stage 6 — tokamak profile source (`--profile`).** Instead of one temperature, events are drawn
+from a whole plasma. Flux surfaces R = R0 + ρa cosθ, Z = κρa sinθ (elongated, no Shafranov shift or
+triangularity); n(ρ) = n0 (1−ρ²)^αN, T(ρ) = max(T0 (1−ρ²)^αT, T_edge); fuel n_D = n_T = f·n/2.
+The birth radius is sampled from the emissivity ε(ρ)ρ = n_D n_T ⟨σv⟩(T(ρ)) ρ, the poloidal angle by
+rejection on R, the toroidal angle uniformly, and the reactant pair by the Stage 2 hit-or-miss at the
+local T. That reproduces the joint rate density n_D n_T f_M f_M σv_rel dV. Each event row also gets
+a birth position (x, y, z), ρ, θ and local T. Defaults use ITER's geometry: R0 = 6.2 m, a = 2.0 m,
+κ = 1.85, B0 = 5.3 T ([Europhysics News 2016](https://www.europhysicsnews.org/articles/epn/pdf/2016/05/epn2016475-6p28.pdf)),
+and ⟨n⟩ = 1×10²⁰ m⁻³ ([ITER confinement lecture](https://www.iter.org/sites/default/files/education/L02_Wagner.pdf)).
+The profile exponents (αN = 0.3, αT = 1, T0 = 20 keV) are illustrative, not an ITER scenario. With
+no dilution (f = 1) they give 1.38 GW, above ITER's 500 MW target, because this model has no helium
+ash or impurities. Use `--fuel` and the profile options to explore.
+
+    ./fusion_mc --profile --out data/DT_profile                       # ITER-like defaults
+    ./fusion_mc --profile --T0 15 --alphaT 1.5 --fuel 0.8             # options: --R0 --a --kappa --navg --alphaN --T0 --alphaT --Tedge --fuel
+    python scripts/plot_profile_results.py                            # figures/tokamak_profile_results.png
+
+![Profile results](figures/tokamak_profile_results.png)
+
+| Stage 6 check (100 000 events) | MC | Prediction |
+|---|---|---|
+| Mean birth ρ | 0.4232 ± 0.0006 | 0.4228 (ε-weighted) |
+| Fusion power, f = 1 | 1375.6 MW (grid integral) | 1376 MW (independent Python integral) |
+| Neutron spectrum sd | 300.2 keV | 297.6 keV = √⟨σ_Brysk²⟩_ε (ratio 1.009; the remainder comes from the T-dependent mean shift) |
+| Neutron FWHM | 678 keV | 701 keV for one Gaussian at T_burn = 15.7 keV. The mixture of temperatures is more peaked than a single Gaussian. |
+
+The MuJoCo tokamak display (`mujoco/tokamak_event_display.py`) moves these events through the
+torus. See [`mujoco/README.md`](mujoco/README.md).
+
 ## Validation (100 000 samples, seed 20260904)
 
 | Quantity | MC | Reference | Ratio |
@@ -104,6 +135,6 @@ points at 1–2 keV scatter more because the Gamow tail carries the integral the
 
 1. Replace the exponential proposal in Stage 1 with a Gaussian at the Gamow peak and compare variances.
 2. Add the D(d,p)T branch and D-³He (Bosch-Hale coefficients are in the paper).
-3. Sample T_i and n_i from a tokamak profile (e.g. parabolic in normalized radius) and weight events by n_D n_T ⟨σv⟩ dV to get a volume-integrated spectrum.
+3. ~~Sample T_i and n_i from a tokamak profile and weight events by n_D n_T ⟨σv⟩ dV.~~ Done in Stage 6 (`--profile`). Possible extensions: Shafranov shift, triangularity, and Ballabio relativistic spectrum corrections.
 4. Replace the toy slab constants with tabulated ENDF/B-VIII ⁶Li/⁷Li cross sections read from CSV.
 5. Add the `1 + a₂ P₂(cosθ)` anisotropy in `angularWeight` for beam energies above a few hundred keV, which turns Stage 3 back into the original (1 + x²) hit-or-miss sampler.

@@ -1,0 +1,18 @@
+{
+  "events_file": "data/DT_thermal_10keV_events.csv",
+  "events_displayed": 300,
+  "R_m": 2.0,
+  "H_m": 2.0,
+  "B_T": 5.0,
+  "sim_duration_s": 0.8,
+  "neutrons_absorbed": 300,
+  "neutron_endcap_fraction_sim": 0.3167,
+  "neutron_endcap_fraction_isotropic_pred": 0.2929,
+  "endcap_fraction_1sigma": 0.0263,
+  "alpha_gyroradius_mean_sim_m": 0.04235,
+  "alpha_gyroradius_mean_pred_m": 0.04235,
+  "alpha_gyroradius_ratio": 1.0,
+  "alpha_energy_drift_max": 6.883382752675971e-13,
+  "frames": 144,
+  "alpha_gyroradius_max_rel_err": 1.5117528275876424e-06
+}

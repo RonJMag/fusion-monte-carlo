@@ -23,6 +23,7 @@
 //     ./fusion_mc --mode beam --Ebeam 100 --T 10    # 100 keV deuteron beam into 10 keV tritium
 //     ./fusion_mc --scan                            # <sigma v>(T) table vs Bosch-Hale fit
 //     ./fusion_mc --transport 50                    # add 50 cm toy lithium-slab neutron transport
+//     ./fusion_mc --profile --T0 20 --alphaT 1      # Stage 6: ITER-like tokamak profile source
 // =====================================================================================
 
 #include <cmath>
@@ -357,6 +358,156 @@ TransportSummary transportSlab(const std::vector<Event>& ev, double thickness_cm
     return s;
 }
 
+
+// =====================================================================================
+//  STAGE 6  --  tokamak profile: volume-integrated source  (--profile)
+//
+//  Flux surfaces: R = R0 + rho a cos(theta),  Z = kappa rho a sin(theta),  0 <= rho <= 1
+//  (elongated, no Shafranov shift or triangularity).  Jacobian: dV = kappa a^2 rho R drho dtheta dphi.
+//  Profiles:  n(rho) = n0 (1 - rho^2)^alphaN ,  T(rho) = max(T0 (1 - rho^2)^alphaT, Tedge)
+//  Fuel:      D-T  n_D = n_T = f n / 2 ;  D-D  n_D = f n   (f = fuel fraction, dilution)
+//  Emissivity eps(rho) = n_D n_T <sigma v>(T)  [D-T]  or  n_D^2 <sigma v> / 2  [D-D], reactions/m^3/s
+//
+//  Sampling the joint fusion-rate density  n_D n_T f_M(v1) f_M(v2) sigma v_rel dV :
+//    rho   ~ eps(rho) rho            (inverse CDF on a grid; the R factor integrates to 2 pi R0)
+//    theta ~ R(rho, theta)           (rejection)
+//    phi   ~ uniform
+//    pair  ~ f_M f_M sigma v_rel at the local T(rho)  (same hit-or-miss as Stage 2, global W_max)
+//  <sigma v>(T) uses the Bosch-Hale fit, which Stage 1 reproduces to < 1 % (see README).
+// =====================================================================================
+struct Profile {
+    double R0 = 6.2, a = 2.0, kappa = 1.85;           // ITER-like geometry
+    double navg = 1.0e20, alphaN = 0.3;               // volume-average electron density, m^-3
+    double T0 = 20.0, alphaT = 1.0, Tedge = 0.5;      // keV
+    double fuel = 1.0;                                // fuel ions / electrons
+    double n0() const { return navg * (1.0 + alphaN); }
+    double n(double rho) const { return n0() * std::pow(std::max(0.0, 1.0 - rho * rho), alphaN); }
+    double T(double rho) const { return std::max(T0 * std::pow(std::max(0.0, 1.0 - rho * rho), alphaT), Tedge); }
+    double volume() const { return 2.0 * PI * PI * R0 * a * a * kappa; }
+};
+
+double emissivity(const Reaction& r, const Profile& P, double rho) {
+    double sv = reactivityBoschHaleFit(r, P.T(rho));
+    double ni = P.fuel * P.n(rho);
+    return (r.m2 == M_T) ? (ni / 2) * (ni / 2) * sv : 0.5 * ni * ni * sv;
+}
+
+struct SourceSample { double rho, theta, phi, x, y, z, T; };
+
+int runProfile(const Reaction& r, const Profile& P, long N, const std::string& prefix, RNG& rng) {
+    const int NG = 4000;
+    std::vector<double> rg(NG + 1), cdf(NG + 1, 0.0), eps(NG + 1);
+    for (int i = 0; i <= NG; ++i) { rg[i] = (double)i / NG; eps[i] = emissivity(r, P, rg[i]); }
+    for (int i = 1; i <= NG; ++i) cdf[i] = cdf[i - 1] + 0.5 * (eps[i] * rg[i] + eps[i - 1] * rg[i - 1]) / NG;
+    double integ = cdf[NG];                                     // Int eps rho drho
+    double rate = integ * 4.0 * PI * PI * P.R0 * P.kappa * P.a * P.a; // reactions / s
+    double Q = r.m1 + r.m2 - r.m3 - r.m4;                      // keV
+    double Pfus = rate * Q * 1.602176634e-16;                  // W
+    // emissivity-weighted moments for validation
+    double wsum = 0, Tburn = 0, rhoMean = 0;
+    for (int i = 1; i <= NG; ++i) { double w = eps[i] * rg[i]; wsum += w; Tburn += w * P.T(rg[i]); rhoMean += w * rg[i]; }
+    Tburn /= wsum;  rhoMean /= wsum;
+
+    double sqrtS0 = r.m1 + r.m2, s0 = sqrtS0 * sqrtS0;
+    double pS0 = std::sqrt((s0 - (r.m3 + r.m4) * (r.m3 + r.m4)) * (s0 - (r.m3 - r.m4) * (r.m3 - r.m4))) / (2 * sqrtS0);
+    double K30 = std::sqrt(pS0 * pS0 + r.m3 * r.m3) - r.m3;
+    // Brysk sigma^2 = 2 m3 K30 T / (m1+m2);  volume-integrated variance = eps-weighted mean of sigma^2
+    double sigB2 = 0;
+    for (int i = 1; i <= NG; ++i) sigB2 += eps[i] * rg[i] * 2.0 * r.m3 * K30 * P.T(rg[i]) / (r.m1 + r.m2);
+    sigB2 /= wsum;
+
+    printf("\n[Stage 6] Tokamak profile source  (%s)\n", r.name.c_str());
+    printf("  geometry R0 = %.2f m, a = %.2f m, kappa = %.2f, V = %.0f m^3\n", P.R0, P.a, P.kappa, P.volume());
+    printf("  n(rho) = %.3e (1-rho^2)^%.2f m^-3 (<n> = %.2e), T(rho) = %.1f (1-rho^2)^%.2f keV, Tedge %.2f keV, fuel %.2f\n",
+           P.n0(), P.alphaN, P.navg, P.T0, P.alphaT, P.Tedge, P.fuel);
+    printf("  reaction rate = %.4e /s ; fusion power = %.1f MW ; emissivity-weighted T = %.2f keV ; <rho>_eps = %.4f\n",
+           rate, Pfus / 1e6, Tburn, rhoMean);
+
+    // ---- sample source points and reactant pairs
+    double Ecut = std::min(40.0 * P.T0, r.Emax), Wmax = findWmax(r, Ecut);
+    double mu = reducedMass(r);
+    std::vector<SourceSample> src;  src.reserve(N);
+    std::vector<Pair> pairs;  pairs.reserve(N);
+    long trials = 0;
+    while ((long)pairs.size() < N) {
+        SourceSample q;
+        double u = rng.u() * integ;
+        int k = (int)(std::lower_bound(cdf.begin(), cdf.end(), u) - cdf.begin());
+        k = std::max(1, std::min(k, NG));
+        double f = (u - cdf[k - 1]) / std::max(cdf[k] - cdf[k - 1], 1e-300);
+        q.rho = rg[k - 1] + f * (rg[k] - rg[k - 1]);
+        double Rmax = P.R0 + q.rho * P.a;
+        do { q.theta = 2.0 * PI * rng.u(); } while (rng.u() * Rmax > P.R0 + q.rho * P.a * std::cos(q.theta));
+        q.phi = 2.0 * PI * rng.u();
+        double R = P.R0 + q.rho * P.a * std::cos(q.theta);
+        q.x = R * std::cos(q.phi);  q.y = R * std::sin(q.phi);  q.z = P.kappa * q.rho * P.a * std::sin(q.theta);
+        q.T = P.T(q.rho);
+        double s1 = std::sqrt(q.T / r.m1), s2 = std::sqrt(q.T / r.m2);
+        while (true) {                                          // hit-or-miss at the local temperature
+            ++trials;
+            Pair p;
+            for (int c = 0; c < 3; ++c) { p.b1[c] = s1 * rng.n01(); p.b2[c] = s2 * rng.n01(); }
+            double dx = p.b1[0] - p.b2[0], dy = p.b1[1] - p.b2[1], dz = p.b1[2] - p.b2[2];
+            p.Erel = 0.5 * mu * (dx * dx + dy * dy + dz * dz);
+            if (p.Erel > Ecut) continue;
+            if (rng.u() < sigmaV(r, p.Erel) / Wmax) { pairs.push_back(p); break; }
+        }
+        src.push_back(q);
+    }
+    std::vector<Event> ev = createEvents(r, pairs, rng);
+
+    double mean = 0, m2 = 0, rhoS = 0;
+    for (size_t i = 0; i < ev.size(); ++i) { mean += ev[i].K3lab; rhoS += src[i].rho; }
+    mean /= ev.size();  rhoS /= ev.size();
+    for (auto& e : ev) m2 += (e.K3lab - mean) * (e.K3lab - mean);
+    double sd = std::sqrt(m2 / ev.size());
+    Hist hE(K30 - 8 * sd, K30 + 8 * sd, 200), hRho(0, 1, 50), hR(P.R0 - P.a, P.R0 + P.a, 50);
+    for (size_t i = 0; i < ev.size(); ++i) {
+        hE.fill(ev[i].K3lab);  hRho.fill(src[i].rho);
+        hR.fill(P.R0 + src[i].rho * P.a * std::cos(src[i].theta));
+    }
+    double sdPred = std::sqrt(sigB2);
+    double rhoVar = 0; for (auto& q : src) rhoVar += (q.rho - rhoS) * (q.rho - rhoS);
+    double rhoErr = std::sqrt(rhoVar / src.size() / src.size());
+    printf("  sampled %ld events (%ld pair trials) ; <rho> sampled = %.4f +/- %.4f vs eps-weighted %.4f\n",
+           (long)ev.size(), trials, rhoS, rhoErr, rhoMean);
+    printf("  volume-integrated %s spectrum: mean %.1f keV, sd %.1f keV, FWHM %.1f keV\n", r.p3.c_str(), mean, sd, hE.fwhm());
+    printf("  Brysk mixture prediction: sd = sqrt(<sigma_B^2>_eps) = %.1f keV -> ratio %.3f ;  single-T Brysk at T_burn: FWHM %.1f keV\n",
+           sdPred, sd / sdPred, 2.3548 * std::sqrt(2.0 * r.m3 * K30 * Tburn / (r.m1 + r.m2)));
+
+    hE.write(prefix + "_spectrum_hist.csv", "K_keV");
+    hRho.write(prefix + "_rho_hist.csv", "rho");
+    hR.write(prefix + "_R_hist.csv", "R_m");
+    {
+        std::ofstream f(prefix + "_profile.csv");
+        f << "rho,n_m3,T_keV,emissivity_m3s,dP_drho_W\n";
+        for (int i = 0; i <= NG; i += 40)
+            f << rg[i] << "," << P.n(rg[i]) << "," << P.T(rg[i]) << "," << eps[i] << ","
+              << eps[i] * rg[i] * 4.0 * PI * PI * P.R0 * P.kappa * P.a * P.a * Q * 1.602176634e-16 << "\n";
+    }
+    {
+        std::ofstream f(prefix + "_events.csv");
+        f << "x_m,y_m,z_m,rho,theta,T_local_keV,E_rel_keV,K3_lab_keV,K4_lab_keV,E3,px3,py3,pz3,E4,px4,py4,pz4\n";
+        for (size_t i = 0; i < ev.size(); ++i) {
+            const Event& e = ev[i];  const SourceSample& q = src[i];
+            f << q.x << "," << q.y << "," << q.z << "," << q.rho << "," << q.theta << "," << q.T << "," << e.Erel << ","
+              << e.K3lab << "," << e.K4lab << "," << e.p3lab.E << "," << e.p3lab.px << "," << e.p3lab.py << "," << e.p3lab.pz << ","
+              << e.p4lab.E << "," << e.p4lab.px << "," << e.p4lab.py << "," << e.p4lab.pz << "\n";
+        }
+    }
+    {
+        std::ofstream f(prefix + "_profile_summary.csv");
+        f << "quantity,value\n" << "reaction," << r.name << "\nR0_m," << P.R0 << "\na_m," << P.a << "\nkappa," << P.kappa
+          << "\nvolume_m3," << P.volume() << "\nn0_m3," << P.n0() << "\nalphaN," << P.alphaN << "\nT0_keV," << P.T0
+          << "\nalphaT," << P.alphaT << "\nTedge_keV," << P.Tedge << "\nfuel_fraction," << P.fuel
+          << "\nreaction_rate_per_s," << rate << "\nfusion_power_MW," << Pfus / 1e6 << "\nT_burn_keV," << Tburn
+          << "\nrho_mean_pred," << rhoMean << "\nrho_mean_mc," << rhoS << "\nspectrum_mean_keV," << mean
+          << "\nspectrum_sd_keV," << sd << "\nspectrum_sd_pred_keV," << sdPred << "\nspectrum_fwhm_keV," << hE.fwhm() << "\n";
+    }
+    printf("  wrote %s_events.csv (with birth positions), _profile.csv, _rho_hist.csv, _R_hist.csv, _spectrum_hist.csv\n", prefix.c_str());
+    return 0;
+}
+
 // =====================================================================================
 //  main
 // =====================================================================================
@@ -364,7 +515,8 @@ int main(int argc, char** argv) {
     std::string reaction = "DT", mode = "thermal", prefix = "out";
     double T = 10.0, Ebeam = 100.0, slab = 0.0;
     long N = 100000;
-    bool scan = false;
+    bool scan = false, profile = false;
+    Profile P;
     unsigned long long seed = 20260904ULL;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -378,6 +530,16 @@ int main(int argc, char** argv) {
         else if (a == "--seed")      seed = std::stoull(next());
         else if (a == "--scan")      scan = true;
         else if (a == "--transport") slab = std::stod(next());
+        else if (a == "--profile")   profile = true;
+        else if (a == "--R0")        P.R0 = std::stod(next());
+        else if (a == "--a")         P.a = std::stod(next());
+        else if (a == "--kappa")     P.kappa = std::stod(next());
+        else if (a == "--navg")      P.navg = std::stod(next());
+        else if (a == "--alphaN")    P.alphaN = std::stod(next());
+        else if (a == "--T0")        P.T0 = std::stod(next());
+        else if (a == "--alphaT")    P.alphaT = std::stod(next());
+        else if (a == "--Tedge")     P.Tedge = std::stod(next());
+        else if (a == "--fuel")      P.fuel = std::stod(next());
         else { std::cerr << "unknown option " << a << "\n"; return 1; }
     }
     Reaction r = (reaction == "DD") ? makeDDn() : makeDT();
@@ -387,6 +549,8 @@ int main(int argc, char** argv) {
     printf("==============================================================\n");
     printf(" Fusion Monte Carlo  |  reaction %s  |  mode %s  |  N = %ld\n", r.name.c_str(), mode.c_str(), N);
     printf("==============================================================\n");
+
+    if (profile) { int rc = runProfile(r, P, N, prefix, rng); printf("\nDone.\n"); return rc; }
 
     // ---------------- Stage 1: reactivity
     if (scan) {
