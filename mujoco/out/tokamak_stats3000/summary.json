@@ -1,0 +1,14 @@
+{
+  "events_file": "data/DT_profile_events.csv",
+  "events": 3000,
+  "B0_T": 5.3,
+  "q": 3.0,
+  "R0": 6.2,
+  "a": 2.0,
+  "kappa": 1.85,
+  "wall_minor_radius_m": 2.3,
+  "alpha_energy_drift_max": 1.0669243266647754e-13,
+  "alphas_lost_to_wall": 0,
+  "neutrons_hit_wall": 3000,
+  "wall_load_outboard_over_inboard": 1.0555935936424397
+}

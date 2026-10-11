@@ -1,0 +1,16 @@
+{
+  "events_file": "data/DT_profile_events.csv",
+  "events": 300,
+  "B0_T": 5.3,
+  "q": 0.0,
+  "R0": 6.2,
+  "a": 2.0,
+  "kappa": 1.85,
+  "wall_minor_radius_m": 2.3,
+  "alpha_energy_drift_max": 1.1268763699945339e-13,
+  "alphas_lost_to_wall": 0,
+  "drift_vz_measured_mean": 0.007266851202637315,
+  "drift_vz_predicted_mean": 0.007261677877338884,
+  "drift_ratio": 1.0007124145942325,
+  "drift_ratio_per_particle_median": 0.9992313383174166
+}

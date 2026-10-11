@@ -1,0 +1,14 @@
+==============================================================
+ Fusion Monte Carlo  |  reaction D-T  |  mode thermal  |  N = 100000
+==============================================================
+
+[Stage 6] Tokamak profile source  (D-T)
+  geometry R0 = 6.20 m, a = 2.00 m, kappa = 1.85, V = 906 m^3
+  n(rho) = 1.300e+20 (1-rho^2)^0.30 m^-3 (<n> = 1.00e+20), T(rho) = 20.0 (1-rho^2)^1.00 keV, Tedge 0.50 keV, fuel 1.00
+  reaction rate = 4.8813e+20 /s ; fusion power = 1375.6 MW ; emissivity-weighted T = 15.74 keV ; <rho>_eps = 0.4228
+  sampled 100000 events (818522 pair trials) ; <rho> sampled = 0.4232 +/- 0.0006 vs eps-weighted 0.4228
+  volume-integrated n spectrum: mean 14073.6 keV, sd 300.2 keV, FWHM 678.0 keV
+  Brysk mixture prediction: sd = sqrt(<sigma_B^2>_eps) = 297.6 keV -> ratio 1.009 ;  single-T Brysk at T_burn: FWHM 700.9 keV
+  wrote data/DT_profile_events.csv (with birth positions), _profile.csv, _rho_hist.csv, _R_hist.csv, _spectrum_hist.csv
+
+Done.
